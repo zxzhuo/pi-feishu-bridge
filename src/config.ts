@@ -9,6 +9,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export interface Config {
   /** Feishu App ID */
@@ -21,6 +22,8 @@ export interface Config {
   sessionBaseDir: string;
   /** Directory to use as cwd for each pi agent (mapped by chatId) */
   cwdBaseDir: string;
+  /** pi agent config directory. Defaults to the normal pi global agent dir. */
+  agentDir: string;
   /** Open IDs allowed to use the bot. Empty = allow all */
   allowedOpenIds: string[];
   /** Whether /think /model etc. are restricted to allowedOpenIds */
@@ -89,6 +92,7 @@ export function loadConfig(): Config {
       process.env.PI_FEISHU_CWD_DIR ??
       file.cwdBaseDir ??
       path.join(os.homedir(), ".pi-feishu", "workspaces"),
+    agentDir: process.env.PI_FEISHU_AGENT_DIR ?? file.agentDir ?? getAgentDir(),
     allowedOpenIds: file.allowedOpenIds ?? [],
     ownerOnly: file.ownerOnly ?? false,
     sessionIdleMs: file.sessionIdleMs ?? 30 * 60 * 1000,

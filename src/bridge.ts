@@ -346,6 +346,7 @@ export async function startBridge(cfg: Config): Promise<() => Promise<void>> {
   const pool = new SessionPool({
     sessionBaseDir: cfg.sessionBaseDir,
     cwdBaseDir: cfg.cwdBaseDir,
+    agentDir: cfg.agentDir,
     sessionIdleMs: cfg.sessionIdleMs,
     maxSessions: cfg.maxSessions,
     onError: (chatId, err) => {
