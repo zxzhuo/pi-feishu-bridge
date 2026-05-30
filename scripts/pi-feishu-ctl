@@ -1,0 +1,273 @@
+#!/usr/bin/env bash
+# pi-feishu-ctl — start/stop/restart/status/logs for pi-feishu-bridge.
+#
+# Usage:
+#   pi-feishu-ctl start          start (build if needed) in background
+#   pi-feishu-ctl stop           stop
+#   pi-feishu-ctl restart        stop + start
+#   pi-feishu-ctl status         show running state + last log lines
+#   pi-feishu-ctl logs [-f]      tail logs (or follow with -f)
+#   pi-feishu-ctl build          rebuild typescript
+#   pi-feishu-ctl run            foreground run (no nohup, Ctrl-C exits)
+#   pi-feishu-ctl install        symlink to ~/.local/bin (or $PI_FEISHU_BIN)
+#   pi-feishu-ctl autostart on   register macOS LaunchAgent (boot on login)
+#   pi-feishu-ctl autostart off  unregister LaunchAgent
+#   pi-feishu-ctl config         print sanitized config
+#
+# Env:
+#   PI_FEISHU_DIR    project dir (default: dirname of this script's parent)
+
+set -euo pipefail
+
+# Resolve project dir from this script's location (this script lives in scripts/).
+# Use readlink to follow symlinks so `pi-feishu-ctl` installed in ~/.local/bin works.
+resolve_link() {
+	local target="$1"
+	while [[ -L "$target" ]]; do
+		local link
+		link="$(readlink "$target")"
+		if [[ "$link" = /* ]]; then
+			target="$link"
+		else
+			target="$(cd "$(dirname "$target")" && cd "$(dirname "$link")" && pwd)/$(basename "$link")"
+		fi
+	done
+	echo "$target"
+}
+SELF="$(resolve_link "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
+DEFAULT_PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_DIR="${PI_FEISHU_DIR:-$DEFAULT_PROJECT_DIR}"
+
+LOG_DIR="$PROJECT_DIR/logs"
+LOG_FILE="$LOG_DIR/run.log"
+PID_FILE="$LOG_DIR/pid"
+ENTRY="$PROJECT_DIR/bin/pi-feishu.js"
+DIST="$PROJECT_DIR/dist/index.js"
+
+mkdir -p "$LOG_DIR"
+
+CYAN="\033[36m"; GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; DIM="\033[2m"; RESET="\033[0m"
+
+log()  { printf "${DIM}%s${RESET} %s\n" "[$(date +%H:%M:%S)]" "$*"; }
+ok()   { printf "${GREEN}✓${RESET} %s\n" "$*"; }
+warn() { printf "${YELLOW}!${RESET} %s\n" "$*"; }
+err()  { printf "${RED}✗${RESET} %s\n" "$*" >&2; }
+
+is_running() {
+	if [[ -f "$PID_FILE" ]]; then
+		local pid
+		pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+		if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+			echo "$pid"
+			return 0
+		fi
+	fi
+	# Fallback: scan for our entry. Match both relative and absolute paths.
+	local found
+	found="$(pgrep -f 'node .*bin/pi-feishu\.js' 2>/dev/null || true)"
+	if [[ -n "$found" ]]; then
+		local first
+		first="$(echo "$found" | head -1)"
+		echo "$first" > "$PID_FILE"
+		echo "$first"
+		return 0
+	fi
+	return 1
+}
+
+ensure_built() {
+	if [[ ! -f "$DIST" ]] || [[ "$PROJECT_DIR/src/bridge.ts" -nt "$DIST" ]]; then
+		log "building (dist outdated)…"
+		(cd "$PROJECT_DIR" && npm run build)
+	fi
+}
+
+cmd_build() {
+	(cd "$PROJECT_DIR" && npm run build)
+	ok "build done"
+}
+
+cmd_start() {
+	local pid=""
+	if pid="$(is_running)"; then
+		warn "already running (pid $pid)"
+		return 0
+	fi
+	ensure_built
+	cd "$PROJECT_DIR"
+	# truncate old log; keep one rotation
+	if [[ -f "$LOG_FILE" ]]; then
+		mv "$LOG_FILE" "$LOG_FILE.prev"
+	fi
+	nohup node "$ENTRY" > "$LOG_FILE" 2>&1 &
+	local new_pid=$!
+	echo "$new_pid" > "$PID_FILE"
+	disown 2>/dev/null || true
+	# wait briefly to detect immediate crashes
+	sleep 1
+	if kill -0 "$new_pid" 2>/dev/null; then
+		ok "started (pid $new_pid)"
+		log "log: $LOG_FILE"
+	else
+		err "failed to start — log tail:"
+		tail -30 "$LOG_FILE" || true
+		rm -f "$PID_FILE"
+		return 1
+	fi
+}
+
+cmd_stop() {
+	local pid=""
+	if ! pid="$(is_running)"; then
+		warn "not running"
+		rm -f "$PID_FILE"
+		return 0
+	fi
+	log "stopping pid ${pid}…"
+	kill "$pid" 2>/dev/null || true
+	for _ in 1 2 3 4 5; do
+		if ! kill -0 "$pid" 2>/dev/null; then
+			rm -f "$PID_FILE"
+			ok "stopped"
+			return 0
+		fi
+		sleep 1
+	done
+	warn "graceful stop timed out, forcing"
+	kill -9 "$pid" 2>/dev/null || true
+	rm -f "$PID_FILE"
+	ok "stopped (forced)"
+}
+
+cmd_restart() {
+	cmd_stop || true
+	cmd_start
+}
+
+cmd_status() {
+	local pid=""
+	if pid="$(is_running)"; then
+		ok "running (pid $pid)"
+		ps -o pid,etime,rss,command -p "$pid" 2>/dev/null | tail -n +1 || true
+	else
+		warn "not running"
+	fi
+	if [[ -f "$LOG_FILE" ]]; then
+		echo
+		printf "${CYAN}── last 12 log lines ──${RESET}\n"
+		tail -12 "$LOG_FILE"
+	fi
+}
+
+cmd_logs() {
+	if [[ "${1:-}" == "-f" ]]; then
+		exec tail -F "$LOG_FILE"
+	else
+		tail -n 100 "$LOG_FILE"
+	fi
+}
+
+cmd_run() {
+	ensure_built
+	cd "$PROJECT_DIR"
+	exec node "$ENTRY"
+}
+
+cmd_install() {
+	local bin_dir="${PI_FEISHU_BIN:-$HOME/.local/bin}"
+	mkdir -p "$bin_dir"
+	ln -sf "$SCRIPT_DIR/pi-feishu-ctl" "$bin_dir/pi-feishu-ctl"
+	ok "linked: $bin_dir/pi-feishu-ctl -> $SCRIPT_DIR/pi-feishu-ctl"
+	case ":$PATH:" in
+		*":$bin_dir:"*) ;;
+		*) warn "$bin_dir is not in PATH; add: export PATH=\"$bin_dir:\$PATH\"" ;;
+	esac
+}
+
+cmd_config() {
+	local cfg="$HOME/.config/pi-feishu/config.json"
+	if [[ ! -f "$cfg" ]]; then
+		err "config not found: $cfg"
+		return 1
+	fi
+	echo "config: $cfg"
+	# strip secret
+	node -e '
+		const fs=require("fs");
+		const c=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+		if (c.appSecret) c.appSecret = "[redacted, "+c.appSecret.length+" chars]";
+		console.log(JSON.stringify(c, null, 2));
+	' "$cfg"
+}
+
+cmd_autostart() {
+	local action="${1:-}"
+	local plist="$HOME/Library/LaunchAgents/com.pi-feishu.bridge.plist"
+	case "$action" in
+		on)
+			cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>            <string>com.pi-feishu.bridge</string>
+	<key>ProgramArguments</key> <array>
+		<string>$(which node)</string>
+		<string>$ENTRY</string>
+	</array>
+	<key>WorkingDirectory</key> <string>$PROJECT_DIR</string>
+	<key>StandardOutPath</key>  <string>$LOG_FILE</string>
+	<key>StandardErrorPath</key><string>$LOG_FILE</string>
+	<key>RunAtLoad</key>        <true/>
+	<key>KeepAlive</key>        <true/>
+	<key>ThrottleInterval</key> <integer>10</integer>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key><string>$PATH</string>
+		<key>HOME</key><string>$HOME</string>
+	</dict>
+</dict>
+</plist>
+EOF
+			launchctl unload "$plist" 2>/dev/null || true
+			launchctl load -w "$plist"
+			ok "LaunchAgent loaded — bridge will auto-start on login"
+			log "plist: $plist"
+			;;
+		off)
+			if [[ -f "$plist" ]]; then
+				launchctl unload "$plist" 2>/dev/null || true
+				rm -f "$plist"
+				ok "LaunchAgent unloaded"
+			else
+				warn "no LaunchAgent installed"
+			fi
+			;;
+		*)
+			err "usage: pi-feishu-ctl autostart on|off"
+			return 1
+			;;
+	esac
+}
+
+cmd_help() {
+	sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
+}
+
+cmd="${1:-help}"
+shift || true
+case "$cmd" in
+	start)     cmd_start "$@" ;;
+	stop)      cmd_stop "$@" ;;
+	restart)   cmd_restart "$@" ;;
+	status|ps) cmd_status "$@" ;;
+	logs|log)  cmd_logs "$@" ;;
+	build)     cmd_build "$@" ;;
+	run|fg)    cmd_run "$@" ;;
+	install)   cmd_install "$@" ;;
+	config)    cmd_config "$@" ;;
+	autostart) cmd_autostart "$@" ;;
+	help|-h|--help) cmd_help ;;
+	*) err "unknown command: $cmd"; cmd_help; exit 1 ;;
+esac

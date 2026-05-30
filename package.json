@@ -1,0 +1,29 @@
+{
+  "name": "pi-feishu-bridge",
+  "version": "0.1.0",
+  "description": "Bridge Feishu/Lark group chats to the pi coding agent SDK.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "pi-feishu": "./bin/pi-feishu.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "start": "node ./bin/pi-feishu.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.77.0",
+    "feishu-agent-bridge": "1.2.6"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.5",
+    "typescript": "5.7.3"
+  }
+}

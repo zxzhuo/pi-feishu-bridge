@@ -1,0 +1,13 @@
+{
+  "appId": "cli_xxxxxxxxxxxx",
+  "appSecret": "${FEISHU_APP_SECRET}",
+  "transport": "ws",
+  "allowedOpenIds": ["ou_replace_with_your_open_id"],
+  "ownerOnly": true,
+  "sessionIdleMs": 1800000,
+  "maxSessions": 32,
+  "streamFlushMs": 350,
+  "streamFlushChars": 80,
+  "dedupTtlMs": 600000,
+  "logLevel": "info"
+}
