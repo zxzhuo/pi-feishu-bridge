@@ -18,9 +18,11 @@ export interface Config {
   appSecret: string;
   /** WS (default) | http | both */
   transport: "ws" | "http" | "both";
-  /** Directory to store per-chat pi sessions */
+  /** Base directory for all projects. Each project = subdirectory, cwd=sessionDir there. */
+  projectsBaseDir: string;
+  /** Legacy: Directory to store per-chat pi sessions (use projectsBaseDir instead) */
   sessionBaseDir: string;
-  /** Directory to use as cwd for each pi agent (mapped by chatId) */
+  /** Legacy: Directory to use as cwd for each pi agent (use projectsBaseDir instead) */
   cwdBaseDir: string;
   /** pi agent config directory. Defaults to the normal pi global agent dir. */
   agentDir: string;
@@ -38,6 +40,8 @@ export interface Config {
   streamFlushChars: number;
   /** Dedup TTL for incoming message ids */
   dedupTtlMs: number;
+  /** Timeout for AI prompt response (ms). 0 = no timeout */
+  promptTimeoutMs: number;
   /** Log level */
   logLevel: "debug" | "info" | "warn" | "error";
 }
@@ -84,6 +88,10 @@ export function loadConfig(): Config {
     appId,
     appSecret,
     transport: (process.env.FEISHU_TRANSPORT as Config["transport"]) ?? file.transport ?? "ws",
+    projectsBaseDir:
+      process.env.PI_FEISHU_PROJECTS_DIR ??
+      file.projectsBaseDir ??
+      path.join(os.homedir(), "workplace", "projects"),
     sessionBaseDir:
       process.env.PI_FEISHU_SESSION_DIR ??
       file.sessionBaseDir ??
@@ -100,6 +108,7 @@ export function loadConfig(): Config {
     streamFlushMs: file.streamFlushMs ?? 350,
     streamFlushChars: file.streamFlushChars ?? 80,
     dedupTtlMs: file.dedupTtlMs ?? 600_000,
+    promptTimeoutMs: file.promptTimeoutMs ?? 0,
     logLevel: (process.env.PI_FEISHU_LOG_LEVEL as Config["logLevel"]) ?? file.logLevel ?? "info",
   };
 }
